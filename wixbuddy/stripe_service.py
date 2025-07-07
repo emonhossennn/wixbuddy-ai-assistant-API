@@ -1,10 +1,11 @@
 import stripe
+import os
 from django.conf import settings
 from django.utils import timezone
 from .models import User, SubscriptionPlan, UserSubscription, PaymentHistory
 
-# Initialize Stripe with your secret key
-stripe.api_key = "sk_test_51Ri0wNR0frcqXXUzpdSFE5Pead4peAwcFRVXG3GwIGiVjCxVoIsX2WTqRrkkWQ8Ina4PD1vB5YqgxW3eBPPjD4fk00nHcKxTFc"
+# Initialize Stripe with your secret key from environment variables
+stripe.api_key = os.getenv('STRIPE_SECRET_KEY', 'sk_test_your_stripe_secret_key_here')
 
 class StripeService:
     @staticmethod
