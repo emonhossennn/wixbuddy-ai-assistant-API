@@ -11,6 +11,8 @@ class SignUpSerializer(serializers.Serializer):
     email = serializers.EmailField()
     name = serializers.CharField(max_length=150)
     family_name = serializers.CharField(max_length=150)
+    job_title = serializers.CharField(max_length=100)
+    current_company = serializers.CharField(max_length=100)
     password = serializers.CharField(write_only=True)
     agreed_to_policy = serializers.BooleanField()
 
