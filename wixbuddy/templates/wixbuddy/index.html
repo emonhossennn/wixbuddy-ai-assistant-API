@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>About Page</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .about-container { max-width: 600px; margin: auto; text-align: center; }
+        .about-image { max-width: 100%; height: auto; margin-bottom: 20px; }
+        .about-bio { font-size: 1.2em; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="about-container">
+        <h1>About</h1>
+        <img id="aboutImage" class="about-image" src="" alt="About Image" style="display:none;" />
+        <div id="aboutBio" class="about-bio"></div>
+    </div>
+    <script>
+        fetch('/api/about')
+            .then(response => {
+                if (!response.ok) throw new Error('No about data found');
+                return response.json();
+            })
+            .then(data => {
+                const about = data.data;
+                document.getElementById('aboutBio').textContent = about.bio;
+                if (about.imageUrl) {
+                    const img = document.getElementById('aboutImage');
+                    img.src = about.imageUrl;
+                    img.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                document.getElementById('aboutBio').textContent = 'No about data found.';
+            });
+    </script>
+</body>
+</html> 
