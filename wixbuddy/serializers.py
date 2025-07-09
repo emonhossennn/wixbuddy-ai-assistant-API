@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Question, User, About, SubscriptionPlan, UserSubscription, PaymentHistory
+from .models import Question, User, About, SubscriptionPlan, UserSubscription, PaymentHistory, Resource, Video, FAQ, ChatMessage, ChatSession
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -9,12 +9,14 @@ class UserSerializer(serializers.ModelSerializer):
 
 class SignUpSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    name = serializers.CharField(max_length=150)
-    family_name = serializers.CharField(max_length=150)
-    job_title = serializers.CharField(max_length=100)
-    current_company = serializers.CharField(max_length=100)
     password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
     agreed_to_policy = serializers.BooleanField()
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        return attrs
 
 class SignInSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -56,7 +58,8 @@ class LogoutResponseSerializer(serializers.Serializer):
 class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
-        fields = ['id', 'title', 'question_type', 'options', 'order', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'title', 'options', 'order', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 # Dashboard-specific serializers
 # Removed DashboardUserSerializer, DashboardDataSerializer, DashboardResponseSerializer
@@ -135,3 +138,39 @@ class ChangePasswordSerializer(serializers.Serializer):
         if len(value) < 8:
             raise serializers.ValidationError("Password must be at least 8 characters long.")
         return value
+
+class VideoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Video
+        fields = ['id', 'title', 'file', 'uploaded_at']
+
+class FAQSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FAQ
+        fields = ['id', 'question', 'answer']
+
+class ResourceSerializer(serializers.ModelSerializer):
+    videos = VideoSerializer(many=True, read_only=True)
+    faqs = FAQSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Resource
+        fields = ['id', 'name', 'description', 'created_at', 'videos', 'faqs']
+
+class MinimalQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['title', 'options']
+
+# Chatbot Serializers
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'sender', 'content', 'timestamp']
+
+class ChatSessionSerializer(serializers.ModelSerializer):
+    messages = ChatMessageSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = ChatSession
+        fields = ['id', 'user', 'start_time', 'end_time', 'messages']

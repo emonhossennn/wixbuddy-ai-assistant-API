@@ -27,24 +27,40 @@ class User(AbstractUser):
         return self.email
 
 class Question(models.Model):
-    QUESTION_TYPES = [
-        ('multiple_choice', 'Multiple Choice'),
-        ('text', 'Text'),
-    ]
-    
     title = models.CharField(max_length=500)
-    question_type = models.CharField(max_length=20, choices=QUESTION_TYPES, default='multiple_choice')
     options = models.JSONField(default=list, blank=True)  # For multiple choice options
-    order = models.IntegerField(default=0)
+    order = models.PositiveIntegerField(default=0, unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         ordering = ['order']
+        verbose_name = 'Survey Question'
+        verbose_name_plural = 'Survey Questions'
     
     def __str__(self):
         return f"{self.order}. {self.title}"
+    
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.order < 0:
+            raise ValidationError({'order': 'Order must be a positive integer.'})
+        # Check for duplicate order
+        qs = Question.objects.exclude(pk=self.pk).filter(order=self.order)
+        if qs.exists():
+            raise ValidationError({'order': 'Order must be unique.'})
+    
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)  # Save first to get a PK if new
+        # Reorder all questions to ensure continuous order and correct titles
+        questions = Question.objects.all().order_by('order', 'pk')
+        for idx, q in enumerate(questions, start=1):
+            if q.order != idx or not q.title.startswith(f"{idx}."):
+                q.order = idx
+                q.title = f"{idx}. {q.title.lstrip('0123456789. ')}"
+                super(Question, q).save(update_fields=['order', 'title'])
 
 class OTP(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -204,3 +220,79 @@ class PaymentHistory(models.Model):
     
     def __str__(self):
         return f"{self.user.email} - {self.amount} {self.currency}"
+
+class Resource(models.Model):
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+class Video(models.Model):
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='videos')
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to='videos/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.title} ({self.resource.name})"
+
+class FAQ(models.Model):
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='faqs')
+    question = models.CharField(max_length=255)
+    answer = models.TextField()
+
+    def __str__(self):
+        return f"FAQ for {self.resource.name}: {self.question}"
+
+
+# Add after existing models
+class BlogCategory(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = 'Blog Categories'
+
+    def __str__(self):
+        return self.name
+
+class Blog(models.Model):
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    category = models.ForeignKey(BlogCategory, on_delete=models.CASCADE, related_name='blogs')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+
+# Chatbot Models
+class ChatSession(models.Model):
+    """
+    Represents a single conversation session with a user.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        user_display = self.user.email if self.user else "Anonymous"
+        return f"Chat Session for {user_display} - {self.start_time.strftime('%Y-%m-%d %H:%M')}"
+
+class ChatMessage(models.Model):
+    """
+    Represents a single message within a chat session.
+    """
+    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, null=True, related_name='messages')
+    sender = models.CharField(max_length=50, choices=[('user', 'User'), ('bot', 'Bot')], default='user')
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f"{self.sender}: {self.content[:50]}..."

@@ -41,7 +41,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
-    'wixbuddy',
+    'adminsortable2',
+    'wixbuddy.apps.WixbuddyConfig',
 ]
 
 MIDDLEWARE = [
@@ -141,3 +142,11 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',
     ],
 }
+# Add this with your other settings
+
+# Gemini API Configuration
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyDyPDsOiXFE28tcTS81mCDC1gTN_82xoXo')
+
+# Debug settings
+DEBUG = True
+ALLOWED_HOSTS = ['*']  # Only for development

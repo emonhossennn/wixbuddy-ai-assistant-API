@@ -1,28 +1,127 @@
-from django.http import HttpResponse
-from django.shortcuts import render, redirect
+from django.shortcuts import render
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, SubscriptionPlan, UserSubscription, PaymentHistory
+from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, SubscriptionPlan, UserSubscription, PaymentHistory, Resource
 from .serializers import (
-    QuestionSerializer, ErrorResponseSerializer, SuccessResponseSerializer,
+    QuestionSerializer,
     UserSerializer, SignUpSerializer, SignInSerializer, ForgotPasswordSerializer, ResetPasswordSerializer,
     GoogleSignInSerializer, AppleSignInSerializer, TokenInfoSerializer, AuthResponseSerializer,
     RefreshTokenRequestSerializer, RefreshTokenResponseSerializer, LogoutResponseSerializer,
     AboutSerializer, SubscriptionPlanSerializer, UserSubscriptionSerializer, CreateSubscriptionSerializer,
-    CancelSubscriptionSerializer, PaymentHistorySerializer, AccountSettingsSerializer, ChangePasswordSerializer
+    CancelSubscriptionSerializer, PaymentHistorySerializer, AccountSettingsSerializer, ChangePasswordSerializer,
+    ResourceSerializer, MinimalQuestionSerializer
 )
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.hashers import make_password, check_password
-import secrets
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
 from .stripe_service import StripeService
 from .authentication import IsAuthenticated
+from django.conf import settings
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Chatbot API endpoints
+import google.generativeai as genai
+from .models import ChatMessage, ChatSession
+from .serializers import ChatMessageSerializer
+
+# Configure Gemini with the key from settings
+genai.configure(api_key=settings.GEMINI_API_KEY)
+
+# Load the Gemini Pro model
+model = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+@api_view(["POST"])
+def chatbot(request):
+    """
+    API endpoint for interacting with Gemini AI chatbot
+    """
+    message = request.data.get("message")
+    if not message:
+        return Response({"error": "No message provided."}, status=400)
+
+    # Check if user is authenticated
+    user = request.user if request.user.is_authenticated else None
+
+    # Create or get ongoing session for this user (or anonymous)
+    session, created = ChatSession.objects.get_or_create(
+        user=user,
+        end_time__isnull=True,
+        defaults={"user": user}
+    )
+
+    # Save user message
+    ChatMessage.objects.create(
+        session=session,
+        sender='user',
+        content=message
+    )
+
+    try:
+        # Call Gemini API
+        response = model.generate_content(message)
+        bot_reply = response.text
+
+        # Save bot reply
+        ChatMessage.objects.create(
+            session=session,  
+            sender='bot',
+            content=bot_reply
+        )
+
+        return Response({"response": bot_reply})
+    except Exception as e:
+        return Response({
+            "error": "Gemini API error",
+            "details": str(e)
+        }, status=500)
+
+@api_view(["GET"])
+def chat_history_api(request):
+    """
+    API endpoint to get chat history for the current user
+    """
+    if request.user.is_authenticated:
+        session = ChatSession.objects.filter(user=request.user).order_by('-start_time').first()
+    else:
+        session = ChatSession.objects.filter(user__isnull=True).order_by('-start_time').first()
+
+    chats = session.messages.all() if session else []
+
+    serializer = ChatMessageSerializer(chats, many=True)
+
+    response_data = {
+        "success": True,
+        "status": status.HTTP_200_OK,
+        "message": "Successfully retrieved chat messages",
+        "data": serializer.data
+    }
+
+    return Response(response_data, status=status.HTTP_200_OK)
+
+@api_view(["POST"])
+def end_chat_session(request):
+    """
+    API endpoint to end the current chat session
+    """
+    if request.user.is_authenticated:
+        session = ChatSession.objects.filter(user=request.user, end_time__isnull=True).first()
+    else:
+        session = ChatSession.objects.filter(user__isnull=True, end_time__isnull=True).first()
+    
+    if session:
+        session.end_time = timezone.now()
+        session.save()
+        return Response({"message": "Chat session ended successfully"})
+    else:
+        return Response({"error": "No active chat session found"}, status=404)
 
 def home(request):
     return render(request, 'wixbuddy/home.html')
@@ -88,18 +187,16 @@ def signup(request):
     if serializer.is_valid():
         data = serializer.validated_data
         if User.objects.filter(email=data['email']).exists():
-            return Response({'error': 'Email already registered.'}, status=400)
+            return Response({'status': 'error', 'email': data['email'], 'message': 'Email already registered.'}, status=400)
         user = User.objects.create(
             email=data['email'],
-            name=data['name'],
-            family_name=data['family_name'],
             password=make_password(data['password']),
             agreed_to_policy=data['agreed_to_policy'],
             username=data['email']
         )
         # Do NOT create tokens here
-        return Response({'message': 'User created successfully.', 'user': UserSerializer(user).data}, status=201)
-    return Response(serializer.errors, status=400)
+        return Response({'status': 'success', 'email': user.email, 'message': 'User created successfully.'}, status=201)
+    return Response({'status': 'error', 'message': serializer.errors}, status=400)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -398,3 +495,63 @@ def account_settings(request):
             return Response({'message': 'Account deleted successfully'})
         except Exception as e:
             return Response({'error': str(e)}, status=400)
+
+class ResourceDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            resource = Resource.objects.get(pk=pk)
+        except Resource.DoesNotExist:
+            return Response({'error': 'Resource not found'}, status=404)
+        serializer = ResourceSerializer(resource, context={'request': request})
+        return Response(serializer.data)
+
+class QuestionsAPIView(APIView):
+    """
+    Handles authentication and question creation in one endpoint. Supports bulk creation via 'questions' list in POST. Returns a congratulatory message as the last item in the response for bulk creation. GET method returns all questions ordered by order field.
+    """
+    def post(self, request):
+        # Authenticate user
+        email = request.data.get('email')
+        password = request.data.get('password')
+        user = authenticate(request, username=email, password=password)
+        if not user:
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        questions_data = request.data.get('questions')
+        if questions_data and isinstance(questions_data, list):
+            created = []
+            errors = []
+            for qdata in questions_data:
+                serializer = QuestionSerializer(data=qdata)
+                if serializer.is_valid():
+                    serializer.save()
+                    minimal_serializer = MinimalQuestionSerializer(serializer.instance)
+                    created.append(minimal_serializer.data)
+                else:
+                    errors.append(serializer.errors)
+            if errors:
+                return Response({'created': created, 'errors': errors}, status=status.HTTP_207_MULTI_STATUS)
+            # Add congratulatory message as the last item
+            created.append({
+                'message': 'Congratulations, you have successfully joined Regplus successfully.'
+            })
+            return Response(created, status=status.HTTP_201_CREATED)
+        else:
+            # Single question creation fallback
+            serializer = QuestionSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                minimal_serializer = MinimalQuestionSerializer(serializer.instance)
+                return Response({
+                    'question': minimal_serializer.data,
+                    'message': 'Congratulations, you have successfully joined Regplus successfully.'
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+        # Return all questions ordered by order field
+        questions = Question.objects.filter(is_active=True).order_by('order')
+        serializer = MinimalQuestionSerializer(questions, many=True)
+        return Response(serializer.data)

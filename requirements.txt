@@ -6,4 +6,6 @@ Pillow==11.3.0
 psycopg2-binary==2.9.10
 python-dotenv==1.1.1
 whitenoise==6.9.0
-requests==2.32.4 
+requests==2.32.4
+google-generativeai==0.8.3
+adminsortable2==0.15.0
