@@ -1,14 +1,15 @@
-from django.shortcuts import render
+from django.http import HttpResponse
+from django.shortcuts import render, redirect
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, SubscriptionPlan, UserSubscription, PaymentHistory, Resource
+from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, SubscriptionPlan, UserSubscription, PaymentHistory, Resource, ChatSession, ChatMessage
 from .serializers import (
-    QuestionSerializer,
+    QuestionSerializer, ErrorResponseSerializer, SuccessResponseSerializer,
     UserSerializer, SignUpSerializer, SignInSerializer, ForgotPasswordSerializer, ResetPasswordSerializer,
-    GoogleSignInSerializer, AppleSignInSerializer, TokenInfoSerializer, AuthResponseSerializer,
+    SignInSerializer, AppleSignInSerializer, TokenInfoSerializer, AuthResponseSerializer,
     RefreshTokenRequestSerializer, RefreshTokenResponseSerializer, LogoutResponseSerializer,
     AboutSerializer, SubscriptionPlanSerializer, UserSubscriptionSerializer, CreateSubscriptionSerializer,
     CancelSubscriptionSerializer, PaymentHistorySerializer, AccountSettingsSerializer, ChangePasswordSerializer,
@@ -16,112 +17,222 @@ from .serializers import (
 )
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.hashers import make_password, check_password
+import secrets
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
 from .stripe_service import StripeService
 from .authentication import IsAuthenticated
-from django.conf import settings
 import json
+from django.conf import settings
+import os
+import json
+import requests
 import logging
+import requests
 
 logger = logging.getLogger(__name__)
 
-# Chatbot API endpoints
-import google.generativeai as genai
-from .models import ChatMessage, ChatSession
-from .serializers import ChatMessageSerializer
 
-# Configure Gemini with the key from settings
-genai.configure(api_key=settings.GEMINI_API_KEY)
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
 
-# Load the Gemini Pro model
-model = genai.GenerativeModel("gemini-2.0-flash-exp")
-
-@api_view(["POST"])
-def chatbot(request):
+# Chatbot API endpoint
+@api_view(['POST'])
+def chatbot_api(request):
     """
-    API endpoint for interacting with Gemini AI chatbot
+    API endpoint for interacting with OpenRouter AI chatbot with history
     """
-    message = request.data.get("message")
-    if not message:
-        return Response({"error": "No message provided."}, status=400)
-
-    # Check if user is authenticated
-    user = request.user if request.user.is_authenticated else None
-
-    # Create or get ongoing session for this user (or anonymous)
-    session, created = ChatSession.objects.get_or_create(
-        user=user,
-        end_time__isnull=True,
-        defaults={"user": user}
-    )
-
-    # Save user message
-    ChatMessage.objects.create(
-        session=session,
-        sender='user',
-        content=message
-    )
-
     try:
-        # Call Gemini API
-        response = model.generate_content(message)
-        bot_reply = response.text
-
-        # Save bot reply
-        ChatMessage.objects.create(
-            session=session,  
-            sender='bot',
-            content=bot_reply
+        message = request.data.get('message', '')
+        if not message:
+            return Response({'error': 'No message provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create a new chat session for each message
+        user = request.user if request.user.is_authenticated else None
+        session = ChatSession.objects.create(user=user)
+        
+        # Save user message
+        user_message = ChatMessage.objects.create(
+            session=session,
+            sender='user',
+            content=message
         )
-
-        return Response({"response": bot_reply})
+        
+        # Call OpenRouter API
+        api_key = settings.OPENROUTER_API_KEY
+        api_url = settings.OPENROUTER_API_URL
+        if not api_key or not api_url:
+            return Response({'error': 'OpenRouter API key or URL is not configured'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        request_body = {
+            "model": "deepseek/deepseek-r1-0528:free",
+            "messages": [
+                {"role": "user", "content": message}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 2000
+        }
+        
+        response = requests.post(api_url, headers=headers, json=request_body)
+        if response.status_code == 200:
+            result = response.json()
+            response_text = result['choices'][0]['message']['content']
+            
+            # Save bot response
+            bot_message = ChatMessage.objects.create(
+                session=session,
+                sender='bot',
+                content=response_text
+            )
+            
+            # End the session after bot responds
+            session.end_time = timezone.now()
+            session.save()
+            
+            return Response({
+                'response': response_text,
+                'session_id': session.id,
+                'message_id': bot_message.id,
+                'session_ended': True
+            })
+        else:
+            return Response({'error': f'OpenRouter API error: {response.text}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
+        return Response({'error': f'Error processing request: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def chat_history(request):
+    """
+    Get chat history for the current user (authenticated or anonymous)
+    """
+    try:
+        user = request.user if request.user.is_authenticated else None
+        
+        if user:
+            # For authenticated users, get their sessions
+            sessions = ChatSession.objects.filter(user=user).order_by('-start_time')
+        else:
+            # For anonymous users, get sessions without user (anonymous sessions)
+            sessions = ChatSession.objects.filter(user__isnull=True).order_by('-start_time')
+        
+        history = []
+        for session in sessions:
+            messages = session.messages.all().order_by('timestamp')
+            session_data = {
+                'session_id': session.id,
+                'start_time': session.start_time,
+                'end_time': session.end_time,
+                'messages': [
+                    {
+                        'id': msg.id,
+                        'sender': msg.sender,
+                        'content': msg.content,
+                        'timestamp': msg.timestamp
+                    } for msg in messages
+                ]
+            }
+            history.append(session_data)
+        
         return Response({
-            "error": "Gemini API error",
-            "details": str(e)
-        }, status=500)
+            'history': history,
+            'total_sessions': len(history)
+        })
+    except Exception as e:
+        return Response({'error': f'Error retrieving chat history: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@api_view(["GET"])
-def chat_history_api(request):
+@api_view(['DELETE'])
+def delete_chat_session(request, session_id):
     """
-    API endpoint to get chat history for the current user
+    Delete a specific chat session by session_id and all its messages
     """
-    if request.user.is_authenticated:
-        session = ChatSession.objects.filter(user=request.user).order_by('-start_time').first()
-    else:
-        session = ChatSession.objects.filter(user__isnull=True).order_by('-start_time').first()
+    try:
+        user = request.user if request.user.is_authenticated else None
+        
+        try:
+            if user:
+                # For authenticated users, get their specific session
+                session = ChatSession.objects.get(id=session_id, user=user)
+            else:
+                # For anonymous users, get any session with this session_id
+                session = ChatSession.objects.get(id=session_id)
+            
+            session.delete()  # This will also delete all related messages due to CASCADE
+            return Response({'message': f'Chat session {session_id} deleted successfully'})
+        except ChatSession.DoesNotExist:
+            return Response({'error': f'Chat session with session_id {session_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': f'Error deleting chat session {session_id}: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    chats = session.messages.all() if session else []
-
-    serializer = ChatMessageSerializer(chats, many=True)
-
-    response_data = {
-        "success": True,
-        "status": status.HTTP_200_OK,
-        "message": "Successfully retrieved chat messages",
-        "data": serializer.data
-    }
-
-    return Response(response_data, status=status.HTTP_200_OK)
-
-@api_view(["POST"])
-def end_chat_session(request):
+@api_view(['DELETE'])
+def delete_all_chat_history(request):
     """
-    API endpoint to end the current chat session
+    Delete all chat history for the current user (authenticated or anonymous)
     """
-    if request.user.is_authenticated:
-        session = ChatSession.objects.filter(user=request.user, end_time__isnull=True).first()
-    else:
-        session = ChatSession.objects.filter(user__isnull=True, end_time__isnull=True).first()
-    
-    if session:
-        session.end_time = timezone.now()
-        session.save()
-        return Response({"message": "Chat session ended successfully"})
-    else:
-        return Response({"error": "No active chat session found"}, status=404)
+    try:
+        user = request.user if request.user.is_authenticated else None
+        
+        if user:
+            # For authenticated users, delete their sessions
+            deleted_count = ChatSession.objects.filter(user=user).count()
+            ChatSession.objects.filter(user=user).delete()
+        else:
+            # For anonymous users, delete anonymous sessions
+            deleted_count = ChatSession.objects.filter(user__isnull=True).count()
+            ChatSession.objects.filter(user__isnull=True).delete()
+        
+        return Response({
+            'message': f'All chat history deleted successfully',
+            'deleted_sessions': deleted_count
+        })
+    except Exception as e:
+        return Response({'error': f'Error deleting chat history: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def get_chat_session(request, session_id):
+    """
+    Get a specific chat session by ID with all its messages
+    """
+    try:
+        user = request.user if request.user.is_authenticated else None
+        
+        try:
+            if user:
+                # For authenticated users, get their specific session
+                session = ChatSession.objects.get(id=session_id, user=user)
+            else:
+                # For anonymous users, get any session with this ID
+                session = ChatSession.objects.get(id=session_id)
+            
+            # Get all messages for this session
+            messages = session.messages.all().order_by('timestamp')
+            
+            session_data = {
+                'session_id': session.id,
+                'start_time': session.start_time,
+                'end_time': session.end_time,
+                'total_messages': messages.count(),
+                'messages': [
+                    {
+                        'id': msg.id,
+                        'sender': msg.sender,
+                        'content': msg.content,
+                        'timestamp': msg.timestamp
+                    } for msg in messages
+                ]
+            }
+            
+            return Response(session_data)
+            
+        except ChatSession.DoesNotExist:
+            return Response({'error': f'Chat session with ID {session_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': f'Error retrieving chat session: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def home(request):
     return render(request, 'wixbuddy/home.html')

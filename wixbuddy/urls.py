@@ -41,7 +41,9 @@ urlpatterns = [
     path('api/resources/<int:pk>/', ResourceDetailView.as_view(), name='resource-detail'),
     path('api/questions/', QuestionsAPIView.as_view(), name='questions-api'),
     path('', views.home, name='home'),
-    path('api/chatbot/', views.chatbot, name='chatbot'),
-    path('api/chatbot/history/', views.chat_history_api, name='chat_history_api'),
-    path('api/chatbot/end-session/', views.end_chat_session, name='end_chat_session'),
+    path('api/chatbot/', views.chatbot_api, name='chatbot'),
+    path('api/chatbot/history/', views.chat_history, name='chat_history'),
+    path('api/chatbot/session/<int:session_id>/', views.get_chat_session, name='get_chat_session'),
+    path('api/chatbot/session/<int:session_id>/delete/', views.delete_chat_session, name='delete_chat_session'),
+    path('api/chatbot/history/delete-all/', views.delete_all_chat_history, name='delete_all_chat_history'),
 ]
