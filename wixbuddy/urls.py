@@ -31,19 +31,10 @@ urlpatterns = [
     path('api/about', AboutAPIView.as_view(), name='about_api'),
     # Account Settings endpoint
     path('api/account-settings/', views.account_settings, name='account_settings'),
-    # Subscription endpoints
-    path('api/subscription/plans/', views.subscription_plans, name='subscription_plans'),
-    path('api/subscription/create/', views.create_subscription, name='create_subscription'),
-    path('api/subscription/status/', views.subscription_status, name='subscription_status'),
-    path('api/subscription/cancel/', views.cancel_subscription, name='cancel_subscription'),
-    path('api/subscription/payments/', views.payment_history, name='payment_history'),
-    path('api/webhook/stripe/', views.stripe_webhook, name='stripe_webhook'),
+    # Include payment and chat module URLs
+    path('api/subscription/', include('wixbuddy.payments.urls')),
+    path('api/chatbot/', include('wixbuddy.chat.urls')),
     path('api/resources/<int:pk>/', ResourceDetailView.as_view(), name='resource-detail'),
     path('api/questions/', QuestionsAPIView.as_view(), name='questions-api'),
     path('', views.home, name='home'),
-    path('api/chatbot/', views.chatbot_api, name='chatbot'),
-    path('api/chatbot/history/', views.chat_history, name='chat_history'),
-    path('api/chatbot/session/<int:session_id>/', views.get_chat_session, name='get_chat_session'),
-    path('api/chatbot/session/<int:session_id>/delete/', views.delete_chat_session, name='delete_chat_session'),
-    path('api/chatbot/history/delete-all/', views.delete_all_chat_history, name='delete_all_chat_history'),
 ]

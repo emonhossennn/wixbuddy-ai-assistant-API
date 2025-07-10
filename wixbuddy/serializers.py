@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Question, User, About, SubscriptionPlan, UserSubscription, PaymentHistory, Resource, Video, FAQ, ChatMessage, ChatSession
+from .models import Question, User, About, Resource, Video, FAQ
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -85,35 +85,7 @@ class AboutSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(obj.image.url) if request else obj.image.url
         return ''
 
-class SubscriptionPlanSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SubscriptionPlan
-        fields = ['id', 'name', 'plan_type', 'billing_cycle', 'price', 'features', 'is_active']
 
-class UserSubscriptionSerializer(serializers.ModelSerializer):
-    plan = SubscriptionPlanSerializer(read_only=True)
-    days_until_renewal = serializers.ReadOnlyField()
-    
-    class Meta:
-        model = UserSubscription
-        fields = [
-            'id', 'plan', 'status', 'current_period_start', 'current_period_end',
-            'cancel_at_period_end', 'is_active', 'days_until_renewal', 'created_at'
-        ]
-
-class CreateSubscriptionSerializer(serializers.Serializer):
-    plan_id = serializers.IntegerField()
-    success_url = serializers.URLField()
-    cancel_url = serializers.URLField()
-
-class CancelSubscriptionSerializer(serializers.Serializer):
-    cancel_at_period_end = serializers.BooleanField(default=True)
-
-class PaymentHistorySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PaymentHistory
-        fields = ['id', 'amount', 'currency', 'status', 'created_at']
-        read_only_fields = ['id', 'created_at']
 
 class AccountSettingsSerializer(serializers.ModelSerializer):
     """Serializer for account settings - allows updating profile information"""
@@ -162,15 +134,4 @@ class MinimalQuestionSerializer(serializers.ModelSerializer):
         model = Question
         fields = ['title', 'options']
 
-# Chatbot Serializers
-class ChatMessageSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ChatMessage
-        fields = ['id', 'sender', 'content', 'timestamp']
 
-class ChatSessionSerializer(serializers.ModelSerializer):
-    messages = ChatMessageSerializer(many=True, read_only=True)
-    
-    class Meta:
-        model = ChatSession
-        fields = ['id', 'user', 'start_time', 'end_time', 'messages']

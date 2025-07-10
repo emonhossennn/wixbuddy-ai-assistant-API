@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'adminsortable2',
     'wixbuddy.apps.WixbuddyConfig',
+    'wixbuddy.payments',
+    'wixbuddy.chat',
 ]
 
 MIDDLEWARE = [

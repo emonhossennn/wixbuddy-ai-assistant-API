@@ -2,12 +2,42 @@ import stripe
 import os
 from django.conf import settings
 from django.utils import timezone
-from .models import User, SubscriptionPlan, UserSubscription, PaymentHistory
+from .models import UserSubscription, PaymentHistory
+from wixbuddy.models import User
+from .models import SubscriptionPlan
 
 # Initialize Stripe with your secret key from environment variables
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY', 'sk_test_your_stripe_secret_key_here')
 
 class StripeService:
+    @staticmethod
+    def create_price(plan):
+        """Create a Stripe price object for a subscription plan"""
+        try:
+            # Convert price to cents (Stripe expects amounts in cents)
+            amount_cents = int(float(plan.price) * 100)
+            
+            # Determine recurring interval
+            interval = 'month' if plan.billing_cycle == 'monthly' else 'year'
+            
+            price = stripe.Price.create(
+                unit_amount=amount_cents,
+                currency='usd',
+                recurring={'interval': interval},
+                product_data={
+                    'name': plan.name,
+                    'description': f"{plan.plan_type} plan - {plan.billing_cycle} billing"
+                }
+            )
+            
+            # Update the plan with the Stripe price ID
+            plan.stripe_price_id = price.id
+            plan.save()
+            
+            return price
+        except stripe.error.StripeError as e:
+            raise Exception(f"Failed to create Stripe price: {str(e)}")
+
     @staticmethod
     def create_customer(user):
         """Create a Stripe customer for the user"""

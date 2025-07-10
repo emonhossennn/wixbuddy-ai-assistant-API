@@ -150,76 +150,7 @@ class DashboardImage(models.Model):
     def __str__(self):
         return self.title
 
-class SubscriptionPlan(models.Model):
-    PLAN_TYPES = [
-        ('basic', 'Basic'),
-        ('pro', 'Pro'),
-        ('premium', 'Premium'),
-    ]
-    
-    BILLING_CYCLES = [
-        ('monthly', 'Monthly'),
-        ('yearly', 'Yearly'),
-    ]
-    
-    name = models.CharField(max_length=100)
-    plan_type = models.CharField(max_length=20, choices=PLAN_TYPES)
-    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLES)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    stripe_price_id = models.CharField(max_length=100, unique=True)
-    is_active = models.BooleanField(default=True)
-    features = models.JSONField(default=list, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        unique_together = ['plan_type', 'billing_cycle']
-    
-    def __str__(self):
-        return f"{self.name} - {self.billing_cycle}"
 
-class UserSubscription(models.Model):
-    STATUS_CHOICES = [
-        ('active', 'Active'),
-        ('canceled', 'Canceled'),
-        ('past_due', 'Past Due'),
-        ('unpaid', 'Unpaid'),
-        ('trialing', 'Trialing'),
-    ]
-    
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='subscriptions')
-    plan = models.ForeignKey(SubscriptionPlan, on_delete=models.CASCADE)
-    stripe_subscription_id = models.CharField(max_length=100, unique=True)
-    stripe_customer_id = models.CharField(max_length=100)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
-    current_period_start = models.DateTimeField()
-    current_period_end = models.DateTimeField()
-    cancel_at_period_end = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return f"{self.user.email} - {self.plan.name}"
-    
-    @property
-    def is_active(self):
-        return self.status in ['active', 'trialing']
-    
-    @property
-    def days_until_renewal(self):
-        from django.utils import timezone
-        return (self.current_period_end - timezone.now()).days
-
-class PaymentHistory(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
-    subscription = models.ForeignKey(UserSubscription, on_delete=models.CASCADE, related_name='payments')
-    stripe_payment_intent_id = models.CharField(max_length=100, unique=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=3, default='usd')
-    status = models.CharField(max_length=20)
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    def __str__(self):
-        return f"{self.user.email} - {self.amount} {self.currency}"
 
 class Resource(models.Model):
     name = models.CharField(max_length=255)
@@ -270,29 +201,4 @@ class Blog(models.Model):
         return self.title
 
 # Chatbot Models
-class ChatSession(models.Model):
-    """
-    Represents a single conversation session with a user.
-    """
-    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
-    start_time = models.DateTimeField(auto_now_add=True)
-    end_time = models.DateTimeField(null=True, blank=True)
 
-    def __str__(self):
-        user_display = self.user.email if self.user else "Anonymous"
-        return f"Chat Session for {user_display} - {self.start_time.strftime('%Y-%m-%d %H:%M')}"
-
-class ChatMessage(models.Model):
-    """
-    Represents a single message within a chat session.
-    """
-    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, null=True, related_name='messages')
-    sender = models.CharField(max_length=50, choices=[('user', 'User'), ('bot', 'Bot')], default='user')
-    content = models.TextField()
-    timestamp = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['timestamp']
-
-    def __str__(self):
-        return f"{self.sender}: {self.content[:50]}..."

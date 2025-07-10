@@ -5,14 +5,13 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, SubscriptionPlan, UserSubscription, PaymentHistory, Resource, ChatSession, ChatMessage
+from .models import Question, User, AccessToken, RefreshToken, About, DashboardImage, Resource
 from .serializers import (
     QuestionSerializer, ErrorResponseSerializer, SuccessResponseSerializer,
     UserSerializer, SignUpSerializer, SignInSerializer, ForgotPasswordSerializer, ResetPasswordSerializer,
     SignInSerializer, AppleSignInSerializer, TokenInfoSerializer, AuthResponseSerializer,
     RefreshTokenRequestSerializer, RefreshTokenResponseSerializer, LogoutResponseSerializer,
-    AboutSerializer, SubscriptionPlanSerializer, UserSubscriptionSerializer, CreateSubscriptionSerializer,
-    CancelSubscriptionSerializer, PaymentHistorySerializer, AccountSettingsSerializer, ChangePasswordSerializer,
+    AboutSerializer, AccountSettingsSerializer, ChangePasswordSerializer,
     ResourceSerializer, MinimalQuestionSerializer
 )
 from django.contrib.auth.decorators import login_required
@@ -21,7 +20,7 @@ import secrets
 from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
-from .stripe_service import StripeService
+
 from .authentication import IsAuthenticated
 import json
 from django.conf import settings
@@ -38,201 +37,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 
-# Chatbot API endpoint
-@api_view(['POST'])
-def chatbot_api(request):
-    """
-    API endpoint for interacting with OpenRouter AI chatbot with history
-    """
-    try:
-        message = request.data.get('message', '')
-        if not message:
-            return Response({'error': 'No message provided'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Create a new chat session for each message
-        user = request.user if request.user.is_authenticated else None
-        session = ChatSession.objects.create(user=user)
-        
-        # Save user message
-        user_message = ChatMessage.objects.create(
-            session=session,
-            sender='user',
-            content=message
-        )
-        
-        # Call OpenRouter API
-        api_key = settings.OPENROUTER_API_KEY
-        api_url = settings.OPENROUTER_API_URL
-        if not api_key or not api_url:
-            return Response({'error': 'OpenRouter API key or URL is not configured'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
-        request_body = {
-            "model": "deepseek/deepseek-r1-0528:free",
-            "messages": [
-                {"role": "user", "content": message}
-            ],
-            "temperature": 0.7,
-            "max_tokens": 2000
-        }
-        
-        response = requests.post(api_url, headers=headers, json=request_body)
-        if response.status_code == 200:
-            result = response.json()
-            response_text = result['choices'][0]['message']['content']
-            
-            # Save bot response
-            bot_message = ChatMessage.objects.create(
-                session=session,
-                sender='bot',
-                content=response_text
-            )
-            
-            # End the session after bot responds
-            session.end_time = timezone.now()
-            session.save()
-            
-            return Response({
-                'response': response_text,
-                'session_id': session.id,
-                'message_id': bot_message.id,
-                'session_ended': True
-            })
-        else:
-            return Response({'error': f'OpenRouter API error: {response.text}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    except Exception as e:
-        return Response({'error': f'Error processing request: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@api_view(['GET'])
-def chat_history(request):
-    """
-    Get chat history for the current user (authenticated or anonymous)
-    """
-    try:
-        user = request.user if request.user.is_authenticated else None
-        
-        if user:
-            # For authenticated users, get their sessions
-            sessions = ChatSession.objects.filter(user=user).order_by('-start_time')
-        else:
-            # For anonymous users, get sessions without user (anonymous sessions)
-            sessions = ChatSession.objects.filter(user__isnull=True).order_by('-start_time')
-        
-        history = []
-        for session in sessions:
-            messages = session.messages.all().order_by('timestamp')
-            session_data = {
-                'session_id': session.id,
-                'start_time': session.start_time,
-                'end_time': session.end_time,
-                'messages': [
-                    {
-                        'id': msg.id,
-                        'sender': msg.sender,
-                        'content': msg.content,
-                        'timestamp': msg.timestamp
-                    } for msg in messages
-                ]
-            }
-            history.append(session_data)
-        
-        return Response({
-            'history': history,
-            'total_sessions': len(history)
-        })
-    except Exception as e:
-        return Response({'error': f'Error retrieving chat history: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@api_view(['DELETE'])
-def delete_chat_session(request, session_id):
-    """
-    Delete a specific chat session by session_id and all its messages
-    """
-    try:
-        user = request.user if request.user.is_authenticated else None
-        
-        try:
-            if user:
-                # For authenticated users, get their specific session
-                session = ChatSession.objects.get(id=session_id, user=user)
-            else:
-                # For anonymous users, get any session with this session_id
-                session = ChatSession.objects.get(id=session_id)
-            
-            session.delete()  # This will also delete all related messages due to CASCADE
-            return Response({'message': f'Chat session {session_id} deleted successfully'})
-        except ChatSession.DoesNotExist:
-            return Response({'error': f'Chat session with session_id {session_id} not found'}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        return Response({'error': f'Error deleting chat session {session_id}: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@api_view(['DELETE'])
-def delete_all_chat_history(request):
-    """
-    Delete all chat history for the current user (authenticated or anonymous)
-    """
-    try:
-        user = request.user if request.user.is_authenticated else None
-        
-        if user:
-            # For authenticated users, delete their sessions
-            deleted_count = ChatSession.objects.filter(user=user).count()
-            ChatSession.objects.filter(user=user).delete()
-        else:
-            # For anonymous users, delete anonymous sessions
-            deleted_count = ChatSession.objects.filter(user__isnull=True).count()
-            ChatSession.objects.filter(user__isnull=True).delete()
-        
-        return Response({
-            'message': f'All chat history deleted successfully',
-            'deleted_sessions': deleted_count
-        })
-    except Exception as e:
-        return Response({'error': f'Error deleting chat history: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@api_view(['GET'])
-def get_chat_session(request, session_id):
-    """
-    Get a specific chat session by ID with all its messages
-    """
-    try:
-        user = request.user if request.user.is_authenticated else None
-        
-        try:
-            if user:
-                # For authenticated users, get their specific session
-                session = ChatSession.objects.get(id=session_id, user=user)
-            else:
-                # For anonymous users, get any session with this ID
-                session = ChatSession.objects.get(id=session_id)
-            
-            # Get all messages for this session
-            messages = session.messages.all().order_by('timestamp')
-            
-            session_data = {
-                'session_id': session.id,
-                'start_time': session.start_time,
-                'end_time': session.end_time,
-                'total_messages': messages.count(),
-                'messages': [
-                    {
-                        'id': msg.id,
-                        'sender': msg.sender,
-                        'content': msg.content,
-                        'timestamp': msg.timestamp
-                    } for msg in messages
-                ]
-            }
-            
-            return Response(session_data)
-            
-        except ChatSession.DoesNotExist:
-            return Response({'error': f'Chat session with ID {session_id} not found'}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        return Response({'error': f'Error retrieving chat session: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def home(request):
     return render(request, 'wixbuddy/home.html')
@@ -416,124 +221,7 @@ class AboutAPIView(APIView):
         serializer = AboutSerializer(about, context={'request': request})
         return Response({'data': serializer.data}, status=200)
 
-# --- SUBSCRIPTION VIEWS ---
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def subscription_plans(request):
-    """Get all available subscription plans"""
-    plans = SubscriptionPlan.objects.filter(is_active=True)
-    serializer = SubscriptionPlanSerializer(plans, many=True)
-    return Response(serializer.data)
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def create_subscription(request):
-    """Create a new subscription checkout session"""
-    serializer = CreateSubscriptionSerializer(data=request.data)
-    if serializer.is_valid():
-        try:
-            plan = SubscriptionPlan.objects.get(
-                id=serializer.validated_data['plan_id'],
-                is_active=True
-            )
-            
-            checkout_session = StripeService.create_checkout_session(
-                user=request.user,
-                plan=plan,
-                success_url=serializer.validated_data['success_url'],
-                cancel_url=serializer.validated_data['cancel_url']
-            )
-            
-            return Response({
-                'checkout_url': checkout_session.url,
-                'session_id': checkout_session.id
-            })
-        except SubscriptionPlan.DoesNotExist:
-            return Response({'error': 'Plan not found'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
-    return Response(serializer.errors, status=400)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def subscription_status(request):
-    """Get current user's subscription status"""
-    try:
-        subscription = UserSubscription.objects.filter(
-            user=request.user,
-            status__in=['active', 'trialing']
-        ).first()
-        
-        if subscription:
-            serializer = UserSubscriptionSerializer(subscription)
-            return Response(serializer.data)
-        else:
-            return Response({'message': 'No active subscription'}, status=404)
-    except Exception as e:
-        return Response({'error': str(e)}, status=400)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def cancel_subscription(request):
-    """Cancel user's subscription"""
-    serializer = CancelSubscriptionSerializer(data=request.data)
-    if serializer.is_valid():
-        try:
-            subscription = UserSubscription.objects.filter(
-                user=request.user,
-                status__in=['active', 'trialing']
-            ).first()
-            
-            if not subscription:
-                return Response({'error': 'No active subscription found'}, status=404)
-            
-            # Cancel in Stripe
-            StripeService.cancel_subscription(
-                subscription.stripe_subscription_id,
-                cancel_at_period_end=serializer.validated_data['cancel_at_period_end']
-            )
-            
-            # Update local subscription
-            subscription.cancel_at_period_end = serializer.validated_data['cancel_at_period_end']
-            if not serializer.validated_data['cancel_at_period_end']:
-                subscription.status = 'canceled'
-            subscription.save()
-            
-            return Response({'message': 'Subscription cancelled successfully'})
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
-    return Response(serializer.errors, status=400)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def payment_history(request):
-    """Get user's payment history"""
-    payments = PaymentHistory.objects.filter(user=request.user).order_by('-created_at')
-    serializer = PaymentHistorySerializer(payments, many=True)
-    return Response(serializer.data)
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def stripe_webhook(request):
-    """Handle Stripe webhook events"""
-    payload = request.body
-    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-    
-    try:
-        # Verify webhook signature (you should add your webhook secret)
-        # event = stripe.Webhook.construct_event(payload, sig_header, 'whsec_your_webhook_secret')
-        
-        # For now, just parse the event without verification
-        event = json.loads(payload)
-        
-        # Handle the event
-        StripeService.handle_webhook_event(event)
-        
-        return Response({'status': 'success'})
-    except ValueError as e:
-        return Response({'error': 'Invalid payload'}, status=400)
-    except Exception as e:
-        return Response({'error': str(e)}, status=400)
 
 # --- ACCOUNT SETTINGS VIEWS ---
 @api_view(['GET', 'PUT', 'POST', 'DELETE'])
@@ -587,18 +275,6 @@ def account_settings(request):
         """Delete current user's account"""
         try:
             user = request.user
-            
-            # Cancel any active subscriptions
-            active_subscriptions = UserSubscription.objects.filter(
-                user=user, 
-                status__in=['active', 'trialing']
-            )
-            
-            for subscription in active_subscriptions:
-                try:
-                    StripeService.cancel_subscription(subscription.stripe_subscription_id, cancel_at_period_end=False)
-                except:
-                    pass  # Continue even if Stripe cancellation fails
             
             # Delete user
             user.delete()
