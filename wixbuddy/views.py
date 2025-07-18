@@ -268,9 +268,9 @@ def subscription_status(request):
 @permission_classes([IsAuthenticated])
 def cancel_subscription(request):
     """Cancel user's subscription"""
-    try:
-        serializer = CancelSubscriptionSerializer(data=request.data)
-        if serializer.is_valid():
+    serializer = CancelSubscriptionSerializer(data=request.data)
+    if serializer.is_valid():
+        try:
             subscription = UserSubscription.objects.filter(
                 user=request.user,
                 status__in=['active', 'trialing']
@@ -279,26 +279,22 @@ def cancel_subscription(request):
             if not subscription:
                 return Response({'error': 'No active subscription found'}, status=404)
             
-            try:
-                # Cancel in Stripe
-                StripeService.cancel_subscription(
-                    subscription.stripe_subscription_id,
-                    cancel_at_period_end=serializer.validated_data['cancel_at_period_end']
-                )
-                
-                # Update local subscription
-                subscription.cancel_at_period_end = serializer.validated_data['cancel_at_period_end']
-                if not serializer.validated_data['cancel_at_period_end']:
-                    subscription.status = 'canceled'
-                subscription.save()
-                
-                return Response({'message': 'Subscription cancelled successfully'})
-            except Exception as stripe_error:
-                return Response({'error': f'Failed to cancel subscription: {str(stripe_error)}'}, status=400)
-        else:
-            return Response(serializer.errors, status=400)
-    except Exception as e:
-        return Response({'error': f'Internal server error: {str(e)}'}, status=500)
+            # Cancel in Stripe
+            StripeService.cancel_subscription(
+                subscription.stripe_subscription_id,
+                cancel_at_period_end=serializer.validated_data['cancel_at_period_end']
+            )
+            
+            # Update local subscription
+            subscription.cancel_at_period_end = serializer.validated_data['cancel_at_period_end']
+            if not serializer.validated_data['cancel_at_period_end']:
+                subscription.status = 'canceled'
+            subscription.save()
+            
+            return Response({'message': 'Subscription cancelled successfully'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+    return Response(serializer.errors, status=400)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -402,8 +398,3 @@ def account_settings(request):
             return Response({'message': 'Account deleted successfully'})
         except Exception as e:
             return Response({'error': str(e)}, status=400)
-            
-
-
-
-

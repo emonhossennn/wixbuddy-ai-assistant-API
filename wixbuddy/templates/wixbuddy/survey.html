@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regpus Survey</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .survey-container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .question {
+            margin-bottom: 30px;
+            display: none;
+        }
+        .question.active {
+            display: block;
+        }
+        .question h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .option {
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .option:hover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        .option.selected {
+            border-color: #007bff;
+            background-color: #e3f2fd;
+        }
+        .navigation {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+        .btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .progress {
+            margin-bottom: 20px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #007bff;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="survey-container">
+        <h1>Regpus Survey</h1>
+        
+        <div class="progress">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p id="progressText">Question 1 of {{ questions|length }}</p>
+        </div>
+
+        <form id="surveyForm">
+            {% for question in questions %}
+            <div class="question {% if forloop.first %}active{% endif %}" data-question="{{ forloop.counter }}">
+                <h3>{{ question.title }}</h3>
+                <div class="options">
+                    {% for option in question.options %}
+                    <div class="option" data-value="{{ option }}">
+                        <input type="radio" name="question_{{ forloop.parentloop.counter }}" value="{{ option }}" id="q{{ forloop.parentloop.counter }}_{{ forloop.counter }}" style="display: none;">
+                        <label for="q{{ forloop.parentloop.counter }}_{{ forloop.counter }}">{{ option }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+
+            <div class="navigation">
+                <button type="button" class="btn btn-secondary" id="prevBtn" onclick="previousQuestion()" disabled>Previous</button>
+                <button type="button" class="btn btn-primary" id="nextBtn" onclick="nextQuestion()">Next</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        let currentQuestion = 1;
+        const totalQuestions = {{ questions|length }};
+        const answers = {};
+
+        function updateProgress() {
+            const progress = (currentQuestion / totalQuestions) * 100;
+            document.getElementById('progressFill').style.width = progress + '%';
+            document.getElementById('progressText').textContent = `Question ${currentQuestion} of ${totalQuestions}`;
+        }
+
+        function showQuestion(questionNumber) {
+            // Hide all questions
+            document.querySelectorAll('.question').forEach(q => q.classList.remove('active'));
+            
+            // Show current question
+            document.querySelector(`[data-question="${questionNumber}"]`).classList.add('active');
+            
+            // Update navigation buttons
+            document.getElementById('prevBtn').disabled = questionNumber === 1;
+            
+            if (questionNumber === totalQuestions) {
+                document.getElementById('nextBtn').textContent = 'Submit';
+            } else {
+                document.getElementById('nextBtn').textContent = 'Next';
+            }
+            
+            updateProgress();
+        }
+
+        function nextQuestion() {
+            if (currentQuestion === totalQuestions) {
+                submitSurvey();
+                return;
+            }
+            
+            currentQuestion++;
+            showQuestion(currentQuestion);
+        }
+
+        function previousQuestion() {
+            if (currentQuestion > 1) {
+                currentQuestion--;
+                showQuestion(currentQuestion);
+            }
+        }
+
+        function submitSurvey() {
+            // Collect all answers
+            const formData = new FormData(document.getElementById('surveyForm'));
+            const answers = {};
+            
+            for (let i = 1; i <= totalQuestions; i++) {
+                const answer = formData.get(`question_${i}`);
+                if (answer) {
+                    answers[`question_${i}`] = answer;
+                }
+            }
+            
+            // Here you can send the answers to your backend
+            console.log('Survey answers:', answers);
+            alert('Thank you for completing the survey!');
+        }
+
+        // Handle option selection
+        document.querySelectorAll('.option').forEach(option => {
+            option.addEventListener('click', function() {
+                const radio = this.querySelector('input[type="radio"]');
+                radio.checked = true;
+                
+                // Remove selected class from all options in this question
+                const question = this.closest('.question');
+                question.querySelectorAll('.option').forEach(opt => opt.classList.remove('selected'));
+                
+                // Add selected class to clicked option
+                this.classList.add('selected');
+            });
+        });
+
+        // Initialize
+        updateProgress();
+    </script>
+</body>
+</html> 
